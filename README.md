@@ -10,6 +10,6 @@ A quick how to so far:
 
 At the very beginning, we need to create a ComponentManager.
 
-'
+''
 dom::ComponentManager<> cm;
-'
+''
