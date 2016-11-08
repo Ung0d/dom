@@ -39,7 +39,11 @@ namespace dom
         unsigned short index;
     };
 
-    class BaseChunkedArray {};
+    class BaseChunkedArray
+    {
+    public:
+        virtual void destroy(ElementHandle h) = 0;
+    };
 
     /**
     * \brief A datastructure that stores its elements in semi-continous memory.
@@ -77,7 +81,7 @@ namespace dom
         /**
         * \brief Destroys an element through an ElementHandle.
         */
-        void destroy(ElementHandle h);
+        virtual void destroy(ElementHandle h) override;
 
         /** \brief Returns the number of memory blocks currently allocated. */
         std::size_t blockCount() const;

@@ -102,12 +102,18 @@ namespace dom
         C& modify();
 
         /**
+        * \brief Removes the component of type C from the entity. If the component doesnt exists, the method does nothing.
+        */
+        template<typename C>
+        void rem();
+
+        /**
         * \brief Creates a new entity wrapped in a shared ptr.
         */
         static std::shared_ptr< Entity<CINDEX, COMP_TOTAL> > create(ComponentManager< CINDEX, COMP_TOTAL>& componentManager);
 
     private:
-        Entity(ComponentManager< CINDEX, COMP_TOTAL>& componentManager) : mComponentManager(componentManager) {}
+        Entity(ComponentManager< CINDEX, COMP_TOTAL>& componentManager) : mMetaData(nullptr), mComponentManager(componentManager) {}
 
     private:
         std::bitset< COMP_TOTAL > mComponentMask; ///<bit i indicates whether component with ID i is assigned
@@ -115,6 +121,8 @@ namespace dom
         std::vector< ComponentHandle > mComponentHandles; ///<stores indices of assigned component in their managers
 
         ComponentManager< CINDEX, COMP_TOTAL>& mComponentManager;
+
+        void updateMetaData(CINDEX i, bool val);
 
     public:
         //forbit copying of an entity
@@ -156,18 +164,15 @@ namespace dom
     template<typename C, typename ...PARAM>
     bool Entity<CINDEX, COMP_TOTAL>::add(PARAM&&... param)
     {
-        static std::unordered_map< unsigned long long, std::unique_ptr<EntityData<CINDEX, COMP_TOTAL>> > sEntityData;
         if (!has<C>()) //dont add if such a component is already assigned
         {
-            mComponentMask.set(ComponentTraits<C, CINDEX, COMP_TOTAL>::getID()); //set the bit
-            auto hashval = mComponentMask.to_ullong(); //get the hash value for the new bitset
-            auto meta = sEntityData.emplace( hashval, std::unique_ptr<EntityData<CINDEX, COMP_TOTAL>>() ); //find metadata, may construct new
-            if (meta.second)
-                meta.first->second.reset( new EntityData<CINDEX, COMP_TOTAL>(mComponentMask) );
-            mMetaData = meta.first->second.get(); //connect to the metadata
-            mMetaData->mSharedCount++;
+            updateMetaData(ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), true);
+
             ComponentHandle c = mComponentManager.template assignComponent<C, PARAM...>( std::forward<PARAM>(param)... );
-            mComponentHandles.push_back(c);
+
+            //get the index we have to add the handle in
+            auto handleIndex = mMetaData->mMetaData[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ];
+            mComponentHandles.insert(mComponentHandles.begin() + handleIndex, c);
             return true;
         }
         return false;
@@ -191,6 +196,47 @@ namespace dom
         return mComponentManager.template getComponent<C>( mComponentHandles[handleIndex] );
     }
 
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    template<typename C>
+    void Entity<CINDEX, COMP_TOTAL>::rem()
+    {
+        if (has<C>())
+        {
+            auto handleIndex = mMetaData->mMetaData[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ];
+            mComponentManager.destroy( ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), mComponentHandles[handleIndex] );
+            mComponentHandles.erase( mComponentHandles.begin() + handleIndex );
+            updateMetaData(ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), false);
+        }
+    }
+
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    void Entity<CINDEX, COMP_TOTAL>::updateMetaData(CINDEX i, bool val)
+    {
+        static std::unordered_map< unsigned long long, std::unique_ptr<EntityData<CINDEX, COMP_TOTAL>> > sEntityData;
+
+        if (mMetaData)
+        { //deref to old metadata
+            mMetaData->mSharedCount--;
+            if (mMetaData->mSharedCount == 0) //no entities with the current bitset anymore, can remove metadata
+            {
+                auto hashval = mComponentMask.to_ullong();
+                sEntityData.erase(hashval);
+            }
+        }
+
+        mComponentMask.set(i, val); //set the bit
+
+        auto hashval = mComponentMask.to_ullong(); //get the hash value for the new bitset
+        auto meta = sEntityData.emplace( hashval, std::unique_ptr<EntityData<CINDEX, COMP_TOTAL>>() ); //find metadata, may construct new
+        if (meta.second)
+            meta.first->second.reset( new EntityData<CINDEX, COMP_TOTAL>(mComponentMask) );
+        mMetaData = meta.first->second.get(); //connect to the metadata
+        mMetaData->mSharedCount++;
+    }
+
+
     template<typename CINDEX, CINDEX COMP_TOTAL>
     std::shared_ptr< Entity<CINDEX, COMP_TOTAL> > Entity<CINDEX, COMP_TOTAL>::create(ComponentManager< CINDEX, COMP_TOTAL>& componentManager)
     {
@@ -204,7 +250,14 @@ namespace dom
     template<typename CINDEX, CINDEX COMP_TOTAL>
     Entity<CINDEX, COMP_TOTAL>::~Entity()
     {
-        //todo destroy assigned components
+        for(CINDEX i = 0; i < COMP_TOTAL; ++i)
+        {
+            if (mComponentMask.test(i))
+            {
+                auto handleIndex = mMetaData->mMetaData[ i ];
+                mComponentManager.destroy( i, mComponentHandles[handleIndex] );
+            }
+        }
     }
 }
 

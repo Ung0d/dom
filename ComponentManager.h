@@ -59,9 +59,8 @@ namespace dom
         template<typename C>
         const C& getComponent(ComponentHandle h) const;
 
-        /** \brief Destroys a component of type C and with the given handle. */
-        template<typename C>
-        void destroy(ComponentHandle h);
+        /** \brief Destroys a component with given typeindex and with the given handle. */
+        void destroy(CINDEX cid, ComponentHandle h);
     };
 
 
@@ -97,11 +96,9 @@ namespace dom
     }
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
-    template<typename C>
-    void ComponentManager<CINDEX, COMP_TOTAL>::destroy(ComponentHandle h)
+    void ComponentManager<CINDEX, COMP_TOTAL>::destroy(CINDEX cid, ComponentHandle h)
     {
-        ChunkedArray<C>* ca = static_cast<ChunkedArray<C>*>( mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get() );
-        ca->destroy(h);
+        mManagers[ cid ].get()->destroy(h);
     }
 }
 

@@ -3,10 +3,12 @@
 #include "ChunkedArray.h"
 #include "Entity.h"
 #include "ComponentManager.h"
+#include "Utility.h"
 
 #define BOOST_TEST_MODULE EntityTesting
 #include <boost/test/unit_test.hpp>
 #include <iostream>
+#include <chrono>
 
 
 BOOST_AUTO_TEST_CASE( chunked_array_test )
@@ -81,7 +83,39 @@ BOOST_AUTO_TEST_CASE( component_id_test )
     }
 }
 
-BOOST_AUTO_TEST_CASE( test1 )
+BOOST_AUTO_TEST_CASE( create_entity_single_component )
+{
+    int counter;
+    struct Position
+    {
+        Position(int& c) : counter(c) { counter++; }
+
+        int& counter;
+
+        ~Position() { counter --; }
+    };
+
+    dom::ComponentManager<> cm;
+    std::shared_ptr<dom::Entity<>> e = dom::Entity<>::create(cm);
+    e->add<Position>(counter);
+    BOOST_REQUIRE(e->has<Position>());
+    BOOST_CHECK_EQUAL(counter, 1);
+    e->rem<Position>();
+    BOOST_CHECK_EQUAL(counter, 0);
+    BOOST_REQUIRE(!e->has<Position>());
+    {
+        std::shared_ptr<dom::Entity<>> earr[100];
+        for (unsigned i = 0; i < 100; i++)
+        {
+            earr[i] = dom::Entity<>::create(cm);
+            earr[i]->add<Position>(counter);
+        }
+        BOOST_CHECK_EQUAL(counter, 100);
+    }
+    BOOST_CHECK_EQUAL(counter, 0);
+}
+
+BOOST_AUTO_TEST_CASE( create_entity_multi_component )
 {
     struct Position
     {
@@ -90,10 +124,48 @@ BOOST_AUTO_TEST_CASE( test1 )
         float x;
         float y;
     };
+    struct Velocity
+    {
+        Velocity(float cx, float cy) : x(cx), y(cy) {}
+
+        float x;
+        float y;
+    };
 
     dom::ComponentManager<> cm;
+    unsigned num = 100;
+    std::vector<std::shared_ptr<dom::Entity<>>> e;
+    e.reserve(num);
 
-    std::shared_ptr<dom::Entity<>> e = dom::Entity<>::create(cm);
-    e->add<Position>(33,0);
-    BOOST_CHECK_EQUAL( e->get<Position>().x, 33 );
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    for (unsigned i = 0; i < num; ++i)
+    {
+        e.emplace_back(dom::Entity<>::create(cm));
+    }
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    std::cout << num << " entities created in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " milliseconds" << std::endl << std::endl;
+
+    begin = std::chrono::steady_clock::now();
+    for (unsigned i = 0; i < num; ++i)
+    {
+        e[i]->add<Position>(33,0);
+        e[i]->add<Velocity>(1,1);
+    }
+    end = std::chrono::steady_clock::now();
+    std::cout << "Components assigned in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " milliseconds" << std::endl << std::endl;
+
+    dom::each<>::iterate<Position, Velocity>(e, [] (const std::shared_ptr<dom::Entity<>>& e, Position& p, Velocity& v)
+     {
+         p.x += v.x;
+         p.y += v.y;
+     });
+
+    begin = std::chrono::steady_clock::now();
+    end = std::chrono::steady_clock::now();
+    std::cout << "Iterated over all components in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " milliseconds" << std::endl << std::endl;
+
+    for (unsigned i = 0; i < num; ++i)
+    {
+        BOOST_CHECK_EQUAL(e[i]->get<Position>().x, 34);
+    }
 }
