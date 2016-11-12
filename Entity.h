@@ -30,28 +30,41 @@
 #include <array>
 #include <unordered_map>
 
-#include "ComponentTraits.h"
-#include "ComponentManager.h"
+#include "ComponentUnpacker.h"
+#include "EntityManager.h"
 
 namespace dom
 {
+    template <typename CINDEX, CINDEX COMP_TOTAL> class Universe;
+
+    using EntityHandle = ElementHandle;
+
     /**
     * \brief A struct that holds meta information for several entities.
     * That information can tell for each component type i what index it
     * has in the componentList of the entity.
     * Note that all entities with the same bitset (that is, the same
-    * components assigned) share the same entityData.
+    * components assigned) share the same MetaData.
     */
-    template<typename CINDEX = unsigned char, CINDEX COMP_TOTAL = 64>
-    class EntityData
+    struct MetaData
     {
-    friend class Entity<CINDEX, COMP_TOTAL>;
-    private:
         std::array<CINDEX, COMP_TOTAL> mMetaData;
         unsigned mSharedCount;
 
-    public:
-        EntityData(std::bitset< COMP_TOTAL > initialMask);
+        MetaData(std::bitset< COMP_TOTAL > initialMask);
+    };
+
+    /**
+    * \brief A struct that holds information that is unique to a single entity.
+    * This information can be accessed through an entity instance, if the handle
+    * is still valid.
+    * The entity data will be stored semi continous just like components.
+    */
+    struct EntityData
+    {
+        std::bitset< COMP_TOTAL > mComponentMask; ///<bit i indicates whether component with ID i is assigned
+        MetaData* mMetaData; ///<points to metadata that all entities with the same bitset share
+        std::vector< ComponentHandle > mComponentHandles; ///<stores indices of assigned component in their managers
     };
 
     /**
@@ -85,7 +98,17 @@ namespace dom
         * Returns success. O(k), where k is the number of assigned components.
         */
         template<typename C, typename ...PARAM>
-        bool add(PARAM&&... param);
+        void add(PARAM&&... param);
+
+        /**
+        * \brief Adds a set of components at once. This is typically more efficient than adding the components one by one.
+        * Component types must be default constructible when using this method.
+        */
+        template<typename ...C>
+        void add();
+
+        template<typename ...C>
+        void add(MetaData* sampleMeta, std::vector< std::pair<CINDEX, bool> >& vec, std::vector< ComponentHandle >& comphandles);
 
         /**
         * \brief Gets a const reference to the requested component. Assumes that the component exists.
@@ -110,39 +133,38 @@ namespace dom
         /**
         * \brief Creates a new entity wrapped in a shared ptr.
         */
-        static std::shared_ptr< Entity<CINDEX, COMP_TOTAL> > create(ComponentManager< CINDEX, COMP_TOTAL>& componentManager);
+        static std::shared_ptr< Entity<CINDEX, COMP_TOTAL> > create(EntityManager< CINDEX, COMP_TOTAL>& EntityManager);
+
+        /** \brief Returns a reference to the EntityManager of that entity. */
+        EntityManager< CINDEX, COMP_TOTAL>& getEntityManager() { return mEntityManager; }
+
+    public:
+        Entity(EntityManager< CINDEX, COMP_TOTAL>& EntityManager) : mMetaData(nullptr), mEntityManager(EntityManager) {}
 
     private:
-        Entity(ComponentManager< CINDEX, COMP_TOTAL>& componentManager) : mMetaData(nullptr), mComponentManager(componentManager) {}
+        EntityHandle mHandle;
+        EntityManager< CINDEX, COMP_TOTAL>& mEntityManager;
 
-    private:
-        std::bitset< COMP_TOTAL > mComponentMask; ///<bit i indicates whether component with ID i is assigned
-        EntityData<CINDEX, COMP_TOTAL>* mMetaData; ///<points to metadata that all entities with the same bitset share
-        std::vector< ComponentHandle > mComponentHandles; ///<stores indices of assigned component in their managers
-
-        ComponentManager< CINDEX, COMP_TOTAL>& mComponentManager;
-
-        void updateMetaData(CINDEX i, bool val);
+        void updateMetaData(const std::vector< std::pair<CINDEX, bool> >& val);
 
     public:
         //forbit copying of an entity
         Entity(const Entity& e) = delete;
         Entity & operator=(const Entity&) = delete;
 
+        static std::unordered_map< unsigned long, std::unique_ptr<MetaData> >& getMetaData()
+        {
+            static std::unordered_map< unsigned long, std::unique_ptr<MetaData> > sEntitiyData;
+            return sEntitiyData;
+        }
+
         ~Entity();
     };
-
-    template<typename CINDEX = unsigned char, CINDEX COMP_TOTAL = 64>
-    class Universe
-    {
-
-    };
-
 
     ///IMPLEMENTATION
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
-    EntityData<CINDEX, COMP_TOTAL>::EntityData(std::bitset< COMP_TOTAL > initialMask) : mSharedCount(0)
+    Entity<CINDEX, COMP_TOTAL>::MetaData::MetaData(std::bitset< COMP_TOTAL > initialMask) : mSharedCount(0)
     {
         CINDEX bitc = 0;
         for (CINDEX i = 0; i < COMP_TOTAL; ++i)
@@ -162,20 +184,34 @@ namespace dom
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
     template<typename C, typename ...PARAM>
-    bool Entity<CINDEX, COMP_TOTAL>::add(PARAM&&... param)
+    void Entity<CINDEX, COMP_TOTAL>::add(PARAM&&... param)
     {
         if (!has<C>()) //dont add if such a component is already assigned
         {
-            updateMetaData(ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), true);
+            updateMetaData({{ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), true}});
 
-            ComponentHandle c = mComponentManager.template assignComponent<C, PARAM...>( std::forward<PARAM>(param)... );
+            ComponentHandle c = mEntityManager.template assignComponent<C, PARAM...>( std::forward<PARAM>(param)... );
 
             //get the index we have to add the handle in
             auto handleIndex = mMetaData->mMetaData[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ];
             mComponentHandles.insert(mComponentHandles.begin() + handleIndex, c);
-            return true;
         }
-        return false;
+    }
+
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    template<typename ...C>
+    void Entity<CINDEX, COMP_TOTAL>::add()
+    {
+        std::vector< std::pair<CINDEX, bool> > vec;
+        std::vector< ComponentHandle > comphandles;
+        ComponentUnpacker<CINDEX, COMP_TOTAL, C...>::unpack(vec, comphandles, getEntityManager());
+        updateMetaData( vec );
+        mComponentHandles.resize(vec.size());
+        for (CINDEX i = 0; i < vec.size(); ++i)
+        {
+            mComponentHandles[ mMetaData->mMetaData[ vec[i].first ] ] = comphandles[i];
+        }
     }
 
 
@@ -184,7 +220,7 @@ namespace dom
     const C& Entity<CINDEX, COMP_TOTAL>::get() const
     {
         auto handleIndex = mMetaData->mMetaData[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ];
-        return mComponentManager.template getComponent<C>( mComponentHandles[handleIndex] );
+        return mEntityManager.template getComponent<C>( mComponentHandles[handleIndex] );
     }
 
 
@@ -193,7 +229,7 @@ namespace dom
     C& Entity<CINDEX, COMP_TOTAL>::modify()
     {
         auto handleIndex = mMetaData->mMetaData[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ];
-        return mComponentManager.template getComponent<C>( mComponentHandles[handleIndex] );
+        return mEntityManager.template getComponent<C>( mComponentHandles[handleIndex] );
     }
 
 
@@ -204,48 +240,61 @@ namespace dom
         if (has<C>())
         {
             auto handleIndex = mMetaData->mMetaData[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ];
-            mComponentManager.destroy( ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), mComponentHandles[handleIndex] );
+            mEntityManager.destroy( ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), mComponentHandles[handleIndex] );
             mComponentHandles.erase( mComponentHandles.begin() + handleIndex );
-            updateMetaData(ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), false);
+            updateMetaData({{ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), false}});
         }
     }
 
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
-    void Entity<CINDEX, COMP_TOTAL>::updateMetaData(CINDEX i, bool val)
+    void Entity<CINDEX, COMP_TOTAL>::updateMetaData(const std::vector< std::pair<CINDEX, bool> >& val)
     {
-        static std::unordered_map< unsigned long long, std::unique_ptr<EntityData<CINDEX, COMP_TOTAL>> > sEntityData;
-
         if (mMetaData)
         { //deref to old metadata
             mMetaData->mSharedCount--;
             if (mMetaData->mSharedCount == 0) //no entities with the current bitset anymore, can remove metadata
             {
                 auto hashval = mComponentMask.to_ullong();
-                sEntityData.erase(hashval);
+                getMetaData().erase(hashval);
             }
         }
-
-        mComponentMask.set(i, val); //set the bit
+        for (const auto& i : val)
+            mComponentMask.set(i.first, i.second); //set the bits
 
         auto hashval = mComponentMask.to_ullong(); //get the hash value for the new bitset
-        auto meta = sEntityData.emplace( hashval, std::unique_ptr<EntityData<CINDEX, COMP_TOTAL>>() ); //find metadata, may construct new
+        auto meta = getMetaData().emplace( hashval, std::unique_ptr<MetaData>() ); //find metadata, may construct new
         if (meta.second)
-            meta.first->second.reset( new EntityData<CINDEX, COMP_TOTAL>(mComponentMask) );
+            meta.first->second.reset( new MetaData(mComponentMask) );
         mMetaData = meta.first->second.get(); //connect to the metadata
         mMetaData->mSharedCount++;
     }
 
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
-    std::shared_ptr< Entity<CINDEX, COMP_TOTAL> > Entity<CINDEX, COMP_TOTAL>::create(ComponentManager< CINDEX, COMP_TOTAL>& componentManager)
+    template<typename ...C>
+    void Entity<CINDEX, COMP_TOTAL>::add(MetaData* sampleMeta, std::vector< std::pair<CINDEX, bool> >& vec, std::vector< ComponentHandle >& comphandles)
+    {
+        mMetaData = sampleMeta;
+        mMetaData->mSharedCount++;
+        mComponentHandles.resize(vec.size());
+        for (CINDEX i = 0; i < vec.size(); ++i)
+        {
+            mComponentHandles[ mMetaData->mMetaData[ vec[i].first ] ] = comphandles[i];
+        }
+    }
+
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    std::shared_ptr< Entity<CINDEX, COMP_TOTAL> > Entity<CINDEX, COMP_TOTAL>::create(EntityManager< CINDEX, COMP_TOTAL>& EntityManager)
     {
         struct makeSharedEnabler : public Entity<CINDEX, COMP_TOTAL>
         {
-            makeSharedEnabler(ComponentManager< CINDEX, COMP_TOTAL>& componentManager) : Entity<CINDEX, COMP_TOTAL>(componentManager){}
+            makeSharedEnabler(EntityManager< CINDEX, COMP_TOTAL>& EntityManager) : Entity<CINDEX, COMP_TOTAL>(EntityManager){}
         };
-        return std::make_shared<makeSharedEnabler>(componentManager);
+        return std::make_shared<makeSharedEnabler>(EntityManager);
     }
+
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
     Entity<CINDEX, COMP_TOTAL>::~Entity()
@@ -255,11 +304,10 @@ namespace dom
             if (mComponentMask.test(i))
             {
                 auto handleIndex = mMetaData->mMetaData[ i ];
-                mComponentManager.destroy( i, mComponentHandles[handleIndex] );
+                mEntityManager.destroy( i, mComponentHandles[handleIndex] );
             }
         }
     }
 }
 
 #endif // DOM_ENTITY_H
-

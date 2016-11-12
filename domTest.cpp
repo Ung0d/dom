@@ -1,8 +1,7 @@
-//#include "Entity.h"
-#include "ComponentTraits.h"
+/*#include "ComponentTraits.h"
 #include "ChunkedArray.h"
 #include "Entity.h"
-#include "ComponentManager.h"
+#include "EntityManager.h"
 #include "Utility.h"
 
 #define BOOST_TEST_MODULE EntityTesting
@@ -95,7 +94,7 @@ BOOST_AUTO_TEST_CASE( create_entity_single_component )
         ~Position() { counter --; }
     };
 
-    dom::ComponentManager<> cm;
+    dom::EntityManager<> cm;
     std::shared_ptr<dom::Entity<>> e = dom::Entity<>::create(cm);
     e->add<Position>(counter);
     BOOST_REQUIRE(e->has<Position>());
@@ -132,8 +131,8 @@ BOOST_AUTO_TEST_CASE( create_entity_multi_component )
         float y;
     };
 
-    dom::ComponentManager<> cm;
-    unsigned num = 100;
+    dom::EntityManager<> cm;
+    unsigned num = 1000000;
     std::vector<std::shared_ptr<dom::Entity<>>> e;
     e.reserve(num);
 
@@ -148,13 +147,15 @@ BOOST_AUTO_TEST_CASE( create_entity_multi_component )
     begin = std::chrono::steady_clock::now();
     for (unsigned i = 0; i < num; ++i)
     {
-        e[i]->add<Position>(33,0);
+        e[i]->add<Position>(0,0);
         e[i]->add<Velocity>(1,1);
     }
     end = std::chrono::steady_clock::now();
     std::cout << "Components assigned in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " milliseconds" << std::endl << std::endl;
 
-    dom::each<>::iterate<Position, Velocity>(e, [] (const std::shared_ptr<dom::Entity<>>& e, Position& p, Velocity& v)
+    int counter = 0;
+
+    dom::each<>::iterate<Position, Velocity>(e,[&counter](const std::shared_ptr<dom::Entity<>>& e, Position& p, Velocity& v)
      {
          p.x += v.x;
          p.y += v.y;
@@ -164,8 +165,5 @@ BOOST_AUTO_TEST_CASE( create_entity_multi_component )
     end = std::chrono::steady_clock::now();
     std::cout << "Iterated over all components in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " milliseconds" << std::endl << std::endl;
 
-    for (unsigned i = 0; i < num; ++i)
-    {
-        BOOST_CHECK_EQUAL(e[i]->get<Position>().x, 34);
-    }
-}
+    BOOST_CHECK_EQUAL(counter, num);
+} */
