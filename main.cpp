@@ -1,8 +1,4 @@
-#include "ComponentTraits.h"
-#include "Entity.h"
-#include "Utility.h"
-#include "CreateAtOnce.h"
-
+/*#include "dom.h"
 #include <entityx/entityx.h>
 
 #define BOOST_TEST_MODULE EntityTesting
@@ -29,7 +25,7 @@ int main()
         float y;
     };
 
-    dom::EntityManager<> cm;
+    dom::Universe<> u;
     unsigned num = 1000000;
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     std::vector<dom::Entity<>> e = dom::createAtOnce<unsigned char, 64, Position, Velocity>(num, cm);
@@ -108,5 +104,5 @@ int main()
 
     //std::cout << e2[1000].component<Position>().x << std::endl;
 
-    return 0;
-}
+    /*return 0;
+}*/
