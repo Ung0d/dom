@@ -103,10 +103,15 @@ BOOST_AUTO_TEST_CASE( single_entity )
     //creat eentity, assign single component, destroy
     {
     dom::EntityHandle<> e = universe.create();
+    dom::EntityHandle<> e2 = e;
     e.add<Position>();
     e.modify<Position>().x = 3;
     BOOST_CHECK_EQUAL(3, e.get<Position>().x);
+    BOOST_REQUIRE(e.valid());
+    BOOST_REQUIRE(e2.valid());
     e.destroy();
+    BOOST_REQUIRE(!e.valid());
+    BOOST_REQUIRE(!e2.valid());
     }
 
     //creat entity, assign 3 components, destroy
