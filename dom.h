@@ -26,8 +26,6 @@
 #ifndef DOM_LIBRARY_H
 #define DOM_LIBRARY_H
 
-#include<iostream>
-
 #include <queue>
 #include <vector>
 #include <memory>
@@ -36,6 +34,7 @@
 #include <array>
 #include <unordered_map>
 #include <stdexcept>
+#include <tuple>
 
 namespace dom
 {
@@ -159,9 +158,23 @@ namespace dom
 
 
     using EntityArrayHandle = ChunkedArrayHandle;
+    using ComponentHandle = ChunkedArrayHandle;
 
     template<typename CINDEX, CINDEX COMP_TOTAL> class EntityData;
     template<typename CINDEX, CINDEX COMP_TOTAL> class Universe;
+
+    /** \brief A Utility struct used to construct a component with parameters. */
+    template<typename C>
+    struct ComponentInstantiator
+    {
+    public:
+        using COMP_TYPE = C;
+
+        template<typename CINDEX, CINDEX COMP_TOTAL, typename ... PARAM>
+        ComponentInstantiator(Universe<CINDEX, COMP_TOTAL>& universe, PARAM&& ... param);
+
+        ComponentHandle handle;
+    };
 
     /**
     * \brief A handle class acts as a pointer to an entity.
@@ -209,8 +222,12 @@ namespace dom
         * Adds a set of components at once. This is typically more efficient than adding the components one by one.
         * Component types must be default constructible when using this method.
         */
-        template<typename ...C>
+        template<typename ... C>
         void add() const;
+
+        /** \brief same as add, but uses dom::instantiate to construct components with parameters. */
+        template<typename ... C>
+        void add(ComponentInstantiator<C>... ci) const;
 
         /**
         * \brief Gets a const reference to the requested component. Assumes that the component exists.
@@ -264,8 +281,6 @@ namespace dom
         MetaData(std::bitset< COMP_TOTAL > initialMask);
     };
 
-    using ComponentHandle = ChunkedArrayHandle;
-
     /**
     * \brief Class that models a specific object in the "world". Entities are simply collections of
     * components. This class can be seen as an interface to manage the components of the
@@ -308,6 +323,7 @@ namespace dom
     class Universe
     {
     friend class EntityHandle<CINDEX, COMP_TOTAL>;
+    template <class C> friend class ComponentInstantiator;
     public:
         static constexpr std::size_t ENTITY_BLOCK_SIZE = 8192; ///<number of entities in a single, continous memory block
         static constexpr std::size_t COMPONENT_BLOCK_SIZE = 8192; ///<number of components in a single, continous memory block
@@ -348,10 +364,9 @@ namespace dom
         * \brief Adds a new component of type C to the entity, if no other component of that type was added before.
         * Returns success. O(k), where k is the number of assigned components.
         * Adds a set of components at once. This is typically more efficient than adding the components one by one.
-        * Component types must be default constructible when using this method.
         */
-        template<typename ...C>
-        void addComponent( const EntityHandle<CINDEX, COMP_TOTAL>& e );
+        template<typename ... C>
+        void addComponent( const EntityHandle<CINDEX, COMP_TOTAL>& e, ComponentInstantiator<C>... ci );
 
         /**
         * \brief Gets a const reference to the requested component. Assumes that the component exists.
@@ -377,6 +392,17 @@ namespace dom
         * datastructes are capable of the (new) entity. */
         void accommodateEntity( const EntityArrayHandle& e );
 
+        /** \brief Called when connected to an EntityData. */
+        void connect(EntityData<CINDEX, COMP_TOTAL>& data);
+
+        /** \brief Called when disconnected from an EntityData. */
+        void disconnect(const EntityData<CINDEX, COMP_TOTAL>& data);
+
+    public:
+        /** \brief Helper method to instantiate components with parameters. */
+        template<typename C, typename ... PARAM>
+        ComponentInstantiator<C> instantiate(PARAM&&... param);
+
     private:
         std::array< std::unique_ptr<BaseChunkedArray>, COMP_TOTAL> mManagers;
         ChunkedArray<EntityData<CINDEX, COMP_TOTAL>, ENTITY_BLOCK_SIZE, ENTITY_REUSE_C> mEntityData;
@@ -394,11 +420,23 @@ namespace dom
     //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
     template <typename CINDEX, CINDEX COMP_TOTAL>
-    template <typename C1, typename... C>
+    template < typename C1, typename... C>
     struct Universe<CINDEX, COMP_TOTAL>::ComponentUnpacker<C1, C...>
     {
         static void unpack(const EntityHandle<CINDEX, COMP_TOTAL>& e,
-                           Universe<CINDEX, COMP_TOTAL>& universe)
+                           Universe<CINDEX, COMP_TOTAL>& universe,
+                           ComponentInstantiator<C1> c1,
+                           ComponentInstantiator<C>... c)
+                           {
+                                std::vector< std::pair<ComponentHandle, CINDEX> > handles;
+                                unpack(e, universe, handles, c1, c...);
+                           }
+
+        static void unpack(const EntityHandle<CINDEX, COMP_TOTAL>& e,
+                           Universe<CINDEX, COMP_TOTAL>& universe,
+                           std::vector< std::pair<ComponentHandle, CINDEX> >& handles,
+                           ComponentInstantiator<C1> c1,
+                           ComponentInstantiator<C>... c)
         {
             if (!universe.template hasComponent<C1>(e)) //dont add if such a component is already assigned
             {
@@ -406,20 +444,11 @@ namespace dom
 
                 data.mComponentMask.set(ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID(), true); //set the bit
 
-                //create the corresponding container if not existing yet
-                if (!universe.mManagers[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ])
-                {
-                    universe.mManagers[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ] =
-                        std::unique_ptr<BaseChunkedArray>( new ChunkedArray<C1, universe.COMPONENT_BLOCK_SIZE>() );
-                }
-                ChunkedArray<C1, universe.COMPONENT_BLOCK_SIZE>* ca =
-                        static_cast<ChunkedArray<C1, universe.COMPONENT_BLOCK_SIZE>*>( universe.mManagers[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ].get() );
-                ComponentHandle c = ca->add();
+                //store the handle
+                handles.emplace_back(c1.handle, ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID());
 
-                //get the index we have to add the handle in
-                auto handleIndex = data.mMetaData->mMetaData[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ];
-                data.mComponentHandles.insert(data.mComponentHandles.begin() + handleIndex, c);
-                ComponentUnpacker<C...>::unpack(e, universe);
+                //recursive...
+                ComponentUnpacker<C...>::unpack(e, universe, handles, c...);
             }
         }
     };
@@ -429,44 +458,44 @@ namespace dom
     struct Universe<CINDEX, COMP_TOTAL>::ComponentUnpacker<C1>
     {
         static void unpack(const EntityHandle<CINDEX, COMP_TOTAL>& e,
-                           Universe<CINDEX, COMP_TOTAL>& universe)
+                           Universe<CINDEX, COMP_TOTAL>& universe,
+                           ComponentInstantiator<C1> c1)
+       {
+            if (!universe.template hasComponent<C1>(e)) //dont add if such a component is already assigned
+            {
+                EntityData<CINDEX, COMP_TOTAL>& data = universe.mEntityData.get(e.mHandle);
+
+                universe.disconnect(data);
+                data.mComponentMask.set(ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID(), true); //set the bit
+                universe.connect(data);
+
+                //get the index we have to add the handle in
+                auto handleIndex = data.mMetaData->mMetaData[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ];
+                data.mComponentHandles.insert(data.mComponentHandles.begin() + handleIndex, c1.handle);
+            }
+       }
+
+        static void unpack(const EntityHandle<CINDEX, COMP_TOTAL>& e,
+                           Universe<CINDEX, COMP_TOTAL>& universe,
+                           std::vector< std::pair<ComponentHandle, CINDEX> >& handles,
+                           ComponentInstantiator<C1> c1)
         {
             if (!universe.template hasComponent<C1>(e)) //dont add if such a component is already assigned
             {
                 EntityData<CINDEX, COMP_TOTAL>& data = universe.mEntityData.get(e.mHandle);
 
-                if (data.mMetaData)
-                { //deref to old metadata
-                    data.mMetaData->mSharedCount--;
-                    if (data.mMetaData->mSharedCount == 0) //no entities with the current bitset anymore, can remove metadata
-                    {
-                        auto hashval = data.mComponentMask.to_ullong();
-                        universe.mComponentMetadata.erase(hashval);
-                    }
-                }
-
+                universe.disconnect(data);
                 data.mComponentMask.set(ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID(), true); //set the bit
+                universe.connect(data);
 
-                auto hashval = data.mComponentMask.to_ullong(); //get the hash value for the new bitset
-                auto meta = universe.mComponentMetadata.emplace( hashval, std::unique_ptr<MetaData<CINDEX, COMP_TOTAL>>() ); //find metadata, may construct new
-                if (meta.second)
-                    meta.first->second.reset( new MetaData<CINDEX, COMP_TOTAL>(data.mComponentMask) );
-                data.mMetaData = meta.first->second.get(); //connect to the metadata
-                data.mMetaData->mSharedCount++;
+                handles.emplace_back(c1.handle, ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID());
 
-                //create the corresponding container if not existing yet
-                if (!universe.mManagers[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ])
+                for (const auto& h : handles)
                 {
-                    universe.mManagers[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ] =
-                        std::unique_ptr<BaseChunkedArray>( new ChunkedArray<C1, universe.COMPONENT_BLOCK_SIZE>() );
+                    //get the index we have to add the handle in
+                    auto handleIndex = data.mMetaData->mMetaData[ h.second ];
+                    data.mComponentHandles.insert(data.mComponentHandles.begin() + handleIndex, h.first);
                 }
-                ChunkedArray<C1, universe.COMPONENT_BLOCK_SIZE>* ca =
-                        static_cast<ChunkedArray<C1, universe.COMPONENT_BLOCK_SIZE>*>( universe.mManagers[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ].get() );
-                ComponentHandle c = ca->add();
-
-                //get the index we have to add the handle in
-                auto handleIndex = data.mMetaData->mMetaData[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ];
-                data.mComponentHandles.insert(data.mComponentHandles.begin() + handleIndex, c);
             }
         }
     };
@@ -588,7 +617,7 @@ namespace dom
     template<typename CINDEX, CINDEX COMP_TOTAL>
     bool EntityHandle<CINDEX, COMP_TOTAL>::valid() const
     {
-        return mUniverse->valid( mHandle, mGeneration );
+        return mUniverse->valid(*this);
     }
 
 
@@ -607,10 +636,18 @@ namespace dom
 
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
-    template<typename ...C>
+    template<typename ... C>
     void EntityHandle<CINDEX, COMP_TOTAL>::add() const
     {
-        mUniverse->template addComponent<C...>(*this);
+        mUniverse->template addComponent<C...>(*this, ComponentInstantiator<C>(*mUniverse)...);
+    }
+
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    template<typename ... C>
+    void EntityHandle<CINDEX, COMP_TOTAL>::add(ComponentInstantiator<C>... ci) const
+    {
+        mUniverse->template addComponent<C...>(*this, ci...);
     }
 
 
@@ -713,10 +750,10 @@ namespace dom
 
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
-    template<typename ...C>
-    void Universe<CINDEX, COMP_TOTAL>::addComponent(const EntityHandle<CINDEX, COMP_TOTAL>& e)
+    template<typename ... C>
+    void Universe<CINDEX, COMP_TOTAL>::addComponent(const EntityHandle<CINDEX, COMP_TOTAL>& e, ComponentInstantiator<C>... ci)
     {
-        ComponentUnpacker<C...>::unpack(e, *this);
+        ComponentUnpacker<C...>::unpack(e, *this, ci...);
     }
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
@@ -748,24 +785,9 @@ namespace dom
             mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get()->destroy( data.mComponentHandles[handleIndex] );
             data.mComponentHandles.erase( data.mComponentHandles.begin() + handleIndex );
 
-            if (data.mMetaData)
-            { //deref to old metadata
-                data.mMetaData->mSharedCount--;
-                if (data.mMetaData->mSharedCount == 0) //no entities with the current bitset anymore, can remove metadata
-                {
-                    auto hashval = data.mComponentMask.to_ullong();
-                    mComponentMetadata.erase(hashval);
-                }
-            }
-
+            disconnect(data);
             data.mComponentMask.set(ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), false); //set the bit
-
-            auto hashval = data.mComponentMask.to_ullong(); //get the hash value for the new bitset
-            auto meta = mComponentMetadata.emplace( hashval, std::unique_ptr<MetaData<CINDEX, COMP_TOTAL>>() ); //find metadata, may construct new
-            if (meta.second)
-                meta.first->second.reset( new MetaData<CINDEX, COMP_TOTAL>(data.mComponentMask) );
-            data.mMetaData = meta.first->second.get(); //connect to the metadata
-            data.mMetaData->mSharedCount++;
+            connect(data);
         }
     }
 
@@ -776,6 +798,58 @@ namespace dom
         std::size_t id = e.block*ENTITY_BLOCK_SIZE + e.index;
         if (mGenerations.size() <= id)
             mGenerations.resize(id+1, 0);
+    }
+
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    void Universe<CINDEX, COMP_TOTAL>::connect(EntityData<CINDEX, COMP_TOTAL>& data)
+    {
+        auto hashval = data.mComponentMask.to_ullong(); //get the hash value for the new bitset
+        auto meta = mComponentMetadata.emplace( hashval, std::unique_ptr<MetaData<CINDEX, COMP_TOTAL>>() ); //find metadata, may construct new
+        if (meta.second)
+            meta.first->second.reset( new MetaData<CINDEX, COMP_TOTAL>(data.mComponentMask) );
+        data.mMetaData = meta.first->second.get(); //connect to the metadata
+        data.mMetaData->mSharedCount++;
+    }
+
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    void Universe<CINDEX, COMP_TOTAL>::disconnect(const EntityData<CINDEX, COMP_TOTAL>& data)
+    {
+        if (data.mMetaData)
+        { //deref to old metadata
+            data.mMetaData->mSharedCount--;
+            if (data.mMetaData->mSharedCount == 0) //no entities with the current bitset anymore, can remove metadata
+            {
+                auto hashval = data.mComponentMask.to_ullong();
+                mComponentMetadata.erase(hashval);
+            }
+        }
+    }
+
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    template<typename C, typename ... PARAM>
+    ComponentInstantiator<C> Universe<CINDEX, COMP_TOTAL>::instantiate(PARAM&&... param)
+    {
+        return ComponentInstantiator<C>( *this, std::forward<PARAM>(param)... );
+    }
+
+
+
+    template<typename C>
+    template<typename CINDEX, CINDEX COMP_TOTAL, typename ... PARAM>
+    ComponentInstantiator<C>::ComponentInstantiator(Universe<CINDEX, COMP_TOTAL>& universe, PARAM&& ... param)
+    {
+        //create the corresponding container if not existing yet
+        if (!universe.mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ])
+        {
+            universe.mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ] =
+                std::unique_ptr<BaseChunkedArray>( new ChunkedArray<C, universe.COMPONENT_BLOCK_SIZE>() );
+        }
+        ChunkedArray<C, universe.COMPONENT_BLOCK_SIZE>* ca =
+                static_cast<ChunkedArray<C, universe.COMPONENT_BLOCK_SIZE>*>( universe.mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get() );
+        handle = ca->add( std::forward<PARAM>(param)... );
     }
 }
 

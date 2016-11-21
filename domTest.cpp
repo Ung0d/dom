@@ -85,6 +85,9 @@ BOOST_AUTO_TEST_CASE( single_entity )
     {
         float x;
         float y;
+
+        Position() {}
+        Position(float cx, float cy) : x(cx), y(cy) {}
     };
 
     struct Velocity
@@ -96,6 +99,9 @@ BOOST_AUTO_TEST_CASE( single_entity )
     struct Gravity
     {
         float grav;
+
+        Gravity() {}
+        Gravity(float cgrav) : grav(cgrav) {}
     };
 
     dom::Universe<> universe;
@@ -103,10 +109,15 @@ BOOST_AUTO_TEST_CASE( single_entity )
     //creat eentity, assign single component, destroy
     {
     dom::EntityHandle<> e = universe.create();
+    dom::EntityHandle<> e2 = e;
     e.add<Position>();
     e.modify<Position>().x = 3;
     BOOST_CHECK_EQUAL(3, e.get<Position>().x);
+    BOOST_REQUIRE(e.valid());
+    BOOST_REQUIRE(e2.valid());
     e.destroy();
+    BOOST_REQUIRE(!e.valid());
+    BOOST_REQUIRE(!e2.valid());
     }
 
     //creat entity, assign 3 components, destroy
@@ -163,6 +174,18 @@ BOOST_AUTO_TEST_CASE( single_entity )
     BOOST_REQUIRE(!e.has<Position>());
     BOOST_REQUIRE(!e.has<Velocity>());
     BOOST_REQUIRE(!e.has<Gravity>());
+    e.destroy();
+    }
+
+    //test dom::instantiate
+    {
+    dom::EntityHandle<> e = universe.create();
+    e.add( universe.instantiate<Position>(5,5),
+           universe.instantiate<Gravity>(1) );
+    BOOST_REQUIRE(e.has<Position>());
+    BOOST_REQUIRE(e.has<Gravity>());
+    BOOST_CHECK_EQUAL(5, e.get<Position>().x);
+    BOOST_CHECK_EQUAL(1, e.get<Gravity>().grav);
     e.destroy();
     }
 }
