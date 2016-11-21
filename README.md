@@ -41,9 +41,12 @@ Entity e = universe.create();
 
 Now we need a arbitrary struct that models one of our components. Note that components should not have logic.
 As you can see, the component-structs in dom dont need to derive from something. Just the bare struct.
+Our struct has, as you can see, a default constructor and a constructor with arguments. Both is possible.
+Default-constructability is not required.
 ```
 struct Position
     {
+        Position() : x(0), y(0) {}
         Position(float cx, float cy) : x(cx), y(cy) {}
 
         float x;
@@ -53,6 +56,18 @@ struct Position
 
 And we add it to the entitiy e like this:
 ```
-e->add<Position>(33,0);
-//now use e->get<Position>() to access the component
+e->add<Position>();
+//or if you want to use a non-default-constructor
+//e->add( universe.instantiate<Position>(3,60) );
+```
+
+You can also add multiple components at once to an entity. Whenever possible you should prefer this over the
+one-by-one-assignment, since it is faster. In the following code-snipped Gravity and Velocity are assumed to
+be component-structs like Position with the appropriate constructors.
+```
+e->add<Position, Gravity, Velocity>();
+//or if you want to use a non-default-constructors
+//e->add( universe.instantiate<Position>(3,60),
+          universe.instantiate<Gravity>(-1),
+          universe.instantiate<Velocity>(1,1));
 ```
