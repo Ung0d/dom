@@ -39,9 +39,14 @@ Universe universe;
 Entity e = universe.create();
 ```
 
-You can destroy entities with by calling `e.destroy()`. This will automatically invalided all other
+You can destroy entities with by calling `e.destroy()`. This will automatically invalidate all other
 entity-handles pointing to that entity. You can check whether an entity-handle is still valid with
 `e.valid()` or just `if(e) ... `.
+Note that every created entity must be deleted manually. Destroying all handles of an entity DOES NOT
+destroy the entity. If you destroy every handle of an entity which you did not destroy before, you
+will have memory leaks in your application.
+[The above design decision is dedicated to the application speed. Using shared_ptr-like handles, which
+destroy the entity automatically, will slow down the application and rises the space for each handle.]
 
 Now we need a arbitrary struct that models one of our components. Note that components should not have logic.
 As you can see, the component-structs in dom dont need to derive from something. Just the bare struct.
@@ -78,8 +83,13 @@ e.add<Position, Gravity, Velocity>();
 
 If an entity has a specific component, you can access it like this:
 ```
-e.get<Position>(); //returns const-reference to the Position struct of entity e
-e.modify<Position>(); //returns non-const-reference to the Position struct of entity e
+if (e.has<Position>()) //returns true if e has a Position Component
+{
+    e.get<Position>(); //returns const-reference to the Position struct of entity e
+    
+    e.modify<Position>(); //returns non-const-reference to the Position struct of entity e
+}
+e.rem<Position>(); //removes the Position component from e (calls destructor of the struct)
 ```
 
 
