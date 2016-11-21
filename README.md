@@ -39,6 +39,10 @@ Universe universe;
 Entity e = universe.create();
 ```
 
+You can destroy entities with by calling `e.destroy()`. This will automatically invalided all other
+entity-handles pointing to that entity. You can check whether an entity-handle is still valid with
+`e.valid()` or just `if(e) ... `.
+
 Now we need a arbitrary struct that models one of our components. Note that components should not have logic.
 As you can see, the component-structs in dom dont need to derive from something. Just the bare struct.
 Our struct has, as you can see, a default constructor and a constructor with arguments. Both is possible.
@@ -56,18 +60,26 @@ struct Position
 
 And we add it to the entitiy e like this:
 ```
-e->add<Position>();
+e.add<Position>();
 //or if you want to use a non-default-constructor
-//e->add( universe.instantiate<Position>(3,60) );
+//e.add( universe.instantiate<Position>(3,60) );
 ```
 
 You can also add multiple components at once to an entity. Whenever possible you should prefer this over the
 one-by-one-assignment, since it is faster. In the following code-snipped Gravity and Velocity are assumed to
 be component-structs like Position with the appropriate constructors.
 ```
-e->add<Position, Gravity, Velocity>();
+e.add<Position, Gravity, Velocity>();
 //or if you want to use a non-default-constructors
-//e->add( universe.instantiate<Position>(3,60),
+//e.add( universe.instantiate<Position>(3,60),
           universe.instantiate<Gravity>(-1),
           universe.instantiate<Velocity>(1,1));
 ```
+
+If an entity has a specific component, you can access it like this:
+```
+e.get<Position>(); //returns const-reference to the Position struct of entity e
+e.modify<Position>(); //returns non-const-reference to the Position struct of entity e
+```
+
+
