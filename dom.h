@@ -26,6 +26,8 @@
 #ifndef DOM_LIBRARY_H
 #define DOM_LIBRARY_H
 
+#include <iostream>
+
 #include <queue>
 #include <vector>
 #include <memory>
@@ -339,12 +341,14 @@ namespace dom
         * This is faster then adding the components one by one to an empty entity. */
         template<typename ... C>
         EntityHandle<CINDEX, COMP_TOTAL> create();
+        template<typename ... C>
+        EntityHandle<CINDEX, COMP_TOTAL> create(ComponentInstantiator<C>... ci);
 
         /** \brief Creates n entities with the given components. This is even faster then calling create<C...>()
         * n times and should be the typical way of construction n entities that share the same bitfield.
         * The function f is called for each created entity. */
         template<typename ... C>
-        void create(std::size_t n, std::function<void(EntityHandle<CINDEX, COMP_TOTAL>&& e)> f);
+        void create(std::size_t n, std::function<void(EntityHandle<CINDEX, COMP_TOTAL> e)> f);
 
     private:
         /** \brief Checks if entityData belonging to the given handle is still valid. */
@@ -425,31 +429,27 @@ namespace dom
     {
         static void unpack(const EntityHandle<CINDEX, COMP_TOTAL>& e,
                            Universe<CINDEX, COMP_TOTAL>& universe,
-                           ComponentInstantiator<C1> c1,
-                           ComponentInstantiator<C>... c)
-                           {
-                                std::vector< std::pair<ComponentHandle, CINDEX> > handles;
-                                unpack(e, universe, handles, c1, c...);
-                           }
-
-        static void unpack(const EntityHandle<CINDEX, COMP_TOTAL>& e,
-                           Universe<CINDEX, COMP_TOTAL>& universe,
                            std::vector< std::pair<ComponentHandle, CINDEX> >& handles,
                            ComponentInstantiator<C1> c1,
                            ComponentInstantiator<C>... c)
         {
             if (!universe.template hasComponent<C1>(e)) //dont add if such a component is already assigned
             {
-                EntityData<CINDEX, COMP_TOTAL>& data = universe.mEntityData.get(e.mHandle);
-
-                data.mComponentMask.set(ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID(), true); //set the bit
-
                 //store the handle
                 handles.emplace_back(c1.handle, ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID());
-
                 //recursive...
                 ComponentUnpacker<C...>::unpack(e, universe, handles, c...);
             }
+        }
+
+        static void unpack(std::vector< std::pair<ComponentHandle, CINDEX> >& handles,
+                           ComponentInstantiator<C1> c1,
+                           ComponentInstantiator<C>... c)
+        {
+            //store the handle
+            handles.emplace_back(c1.handle, ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID());
+            //recursive...
+            ComponentUnpacker<C...>::unpack(handles, c...);
         }
     };
 
@@ -459,44 +459,18 @@ namespace dom
     {
         static void unpack(const EntityHandle<CINDEX, COMP_TOTAL>& e,
                            Universe<CINDEX, COMP_TOTAL>& universe,
-                           ComponentInstantiator<C1> c1)
-       {
-            if (!universe.template hasComponent<C1>(e)) //dont add if such a component is already assigned
-            {
-                EntityData<CINDEX, COMP_TOTAL>& data = universe.mEntityData.get(e.mHandle);
-
-                universe.disconnect(data);
-                data.mComponentMask.set(ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID(), true); //set the bit
-                universe.connect(data);
-
-                //get the index we have to add the handle in
-                auto handleIndex = data.mMetaData->mMetaData[ ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID() ];
-                data.mComponentHandles.insert(data.mComponentHandles.begin() + handleIndex, c1.handle);
-            }
-       }
-
-        static void unpack(const EntityHandle<CINDEX, COMP_TOTAL>& e,
-                           Universe<CINDEX, COMP_TOTAL>& universe,
                            std::vector< std::pair<ComponentHandle, CINDEX> >& handles,
                            ComponentInstantiator<C1> c1)
         {
             if (!universe.template hasComponent<C1>(e)) //dont add if such a component is already assigned
             {
-                EntityData<CINDEX, COMP_TOTAL>& data = universe.mEntityData.get(e.mHandle);
-
-                universe.disconnect(data);
-                data.mComponentMask.set(ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID(), true); //set the bit
-                universe.connect(data);
-
                 handles.emplace_back(c1.handle, ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID());
-
-                for (const auto& h : handles)
-                {
-                    //get the index we have to add the handle in
-                    auto handleIndex = data.mMetaData->mMetaData[ h.second ];
-                    data.mComponentHandles.insert(data.mComponentHandles.begin() + handleIndex, h.first);
-                }
             }
+        }
+
+        static void unpack(std::vector< std::pair<ComponentHandle, CINDEX> >& handles, ComponentInstantiator<C1> c1)
+        {
+            handles.emplace_back(c1.handle, ComponentTraits<C1, CINDEX, COMP_TOTAL>::getID());
         }
     };
 
@@ -709,17 +683,78 @@ namespace dom
     template<typename ... C>
     EntityHandle<CINDEX, COMP_TOTAL> Universe<CINDEX, COMP_TOTAL>::create()
     {
+        return create<C...>(ComponentInstantiator<C>(*this)...);
+    }
+
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    template<typename ... C>
+    EntityHandle<CINDEX, COMP_TOTAL> Universe<CINDEX, COMP_TOTAL>::create(ComponentInstantiator<C>... ci)
+    {
         auto e = create(); //create empty entity
-        e.template add<C...>();
+        e.template add<C...>(ci...);
         return e;
     }
 
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
     template<typename ... C>
-    void Universe<CINDEX, COMP_TOTAL>::create(std::size_t n, std::function<void(EntityHandle<CINDEX, COMP_TOTAL>&& e)> f)
+    void Universe<CINDEX, COMP_TOTAL>::create(std::size_t n,
+                                              std::function<void(EntityHandle<CINDEX, COMP_TOTAL> e)> f)
     {
+        if (n > 0)
+        {
+            MetaData<CINDEX, COMP_TOTAL>* sampleMeta;
 
+            std::vector< std::pair<ComponentHandle, CINDEX> > handles;
+            ComponentUnpacker<C...>::unpack(handles, ComponentInstantiator<C>(*this)...);
+
+            EntityArrayHandle ehandle = mEntityData.add();
+            accommodateEntity(ehandle);
+            EntityData<CINDEX, COMP_TOTAL>& data = mEntityData.get(ehandle);
+
+            for (const auto& h : handles) { data.mComponentMask.set(h.second, true); }
+
+            auto hashval = data.mComponentMask.to_ullong(); //get the hash value for the new bitset
+            auto meta = mComponentMetadata.emplace( hashval, std::unique_ptr<MetaData<CINDEX, COMP_TOTAL>>() ); //find metadata, may construct new
+            if (meta.second)
+                meta.first->second.reset( new MetaData<CINDEX, COMP_TOTAL>(data.mComponentMask) );
+            sampleMeta = meta.first->second.get();
+
+            data.mMetaData = sampleMeta;
+            sampleMeta->mSharedCount++;
+            for (const auto& h : handles)
+            {
+                //get the index we have to add the handle in
+                auto handleIndex = data.mMetaData->mMetaData[ h.second ];
+                if (handleIndex > data.mComponentHandles.size())
+                    data.mComponentHandles.resize(handleIndex+1);
+                data.mComponentHandles.insert(data.mComponentHandles.begin() + handleIndex, h.first);
+            }
+            f(EntityHandle<CINDEX, COMP_TOTAL>(this, ehandle, mGenerations[ ehandle.block*ENTITY_BLOCK_SIZE + ehandle.index ]));
+
+            for(std::size_t i = 0; i < n; ++i)
+            {
+                std::vector< std::pair<ComponentHandle, CINDEX> > handles;
+                ComponentUnpacker<C...>::unpack(handles, ComponentInstantiator<C>(*this)...);
+
+                EntityArrayHandle ehandle = mEntityData.add();
+                accommodateEntity(ehandle);
+                EntityData<CINDEX, COMP_TOTAL>& data = mEntityData.get(ehandle);
+
+                data.mMetaData = sampleMeta;
+                sampleMeta->mSharedCount++;
+
+                data.mComponentHandles.resize(handles.size());
+                for (const auto& h : handles)
+                {
+                    data.mComponentMask.set(h.second, true);
+                    //get the index we have to add the handle in
+                    data.mComponentHandles[ data.mMetaData->mMetaData[ h.second ] ] = h.first;
+                }
+                f(EntityHandle<CINDEX, COMP_TOTAL>(this, ehandle, mGenerations[ ehandle.block*ENTITY_BLOCK_SIZE + ehandle.index ]));
+            }
+        }
     }
 
 
@@ -753,7 +788,24 @@ namespace dom
     template<typename ... C>
     void Universe<CINDEX, COMP_TOTAL>::addComponent(const EntityHandle<CINDEX, COMP_TOTAL>& e, ComponentInstantiator<C>... ci)
     {
-        ComponentUnpacker<C...>::unpack(e, *this, ci...);
+        EntityData<CINDEX, COMP_TOTAL>& data = mEntityData.get(e.mHandle);
+        std::vector< std::pair<ComponentHandle, CINDEX> > handles;
+        disconnect(data);
+        ComponentUnpacker<C...>::unpack(e, *this, handles, ci...);
+        for (const auto& h : handles)
+        {
+            //set the bit
+            data.mComponentMask.set(h.second, true);
+        }
+        connect(data);
+        for (const auto& h : handles)
+        {
+            //get the index we have to add the handle in
+            auto handleIndex = data.mMetaData->mMetaData[ h.second ];
+            if (handleIndex > data.mComponentHandles.size())
+                data.mComponentHandles.resize(handleIndex+1);
+            data.mComponentHandles.insert(data.mComponentHandles.begin() + handleIndex, h.first);
+        }
     }
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
@@ -851,6 +903,61 @@ namespace dom
                 static_cast<ChunkedArray<C, universe.COMPONENT_BLOCK_SIZE>*>( universe.mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get() );
         handle = ca->add( std::forward<PARAM>(param)... );
     }
+
+
+
+    //////////////////////////////////////////////////////////////////////////////////////////////////////////
+    //////////////////////UTILITY_METHODS/////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    template<typename CINDEX = unsigned char, CINDEX COMP_TOTAL = 64>
+    struct Utility
+    {
+        template <typename T> struct Identity { typedef T type; };
+
+        template <typename... C>
+        struct ComponentChecker;
+
+        template <typename ... C>
+        static void iterate( std::vector<EntityHandle<CINDEX, COMP_TOTAL>>& entities,
+                      typename Identity<std::function<void(const EntityHandle<CINDEX, COMP_TOTAL>&, C&...)>>::type f);
+    };
+
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    template <typename ... C>
+    void Utility<CINDEX, COMP_TOTAL>::iterate(
+                         std::vector<EntityHandle<CINDEX, COMP_TOTAL>>& entities,
+                         typename Identity<std::function<void(const EntityHandle<CINDEX, COMP_TOTAL>&, C&...)>>::type f)
+    {
+        for (auto& e : entities)
+        {
+            if (ComponentChecker<C...>::check(e))
+            {
+                f(e, e.template modify<C>()... );
+            }
+        }
+    }
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    template <typename C1, typename... C>
+    struct Utility<CINDEX, COMP_TOTAL>::ComponentChecker<C1, C...>
+    {
+      static bool check(const EntityHandle<CINDEX, COMP_TOTAL>& e)
+      {
+          return e.template has<C1>() && Utility<CINDEX, COMP_TOTAL>::ComponentChecker<C...>::check(e);
+      }
+    };
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    template <typename C1>
+    struct Utility<CINDEX, COMP_TOTAL>::ComponentChecker<C1>
+    {
+      static bool check(const EntityHandle<CINDEX, COMP_TOTAL>& e)
+      {
+        return e.template has<C1>();
+      }
+    };
 }
 
 #endif // DOM_LIBRARY_H
