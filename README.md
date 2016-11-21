@@ -92,4 +92,20 @@ if (e.has<Position>()) //returns true if e has a Position Component
 e.rem<Position>(); //removes the Position component from e (calls destructor of the struct)
 ```
 
+If you want to create multiple entities with the same components, the fastest way of doing so is:
+```
+//creates 1000 entities with Position and Velocity components and
+//push them in a vector
+std::vector<Entity> vec;
+universe.create(1000, [&vec] (Entity en) { vec.emplace_back(en); });
+```
 
+Last but not least: If you have a datastructure containing entities and want to iterate over all
+entities with a specific set of components, use:
+```
+dom::Utility<>::iterate<Position, Velocity>(e, [](Entity e, Position &position, Velocity &velocity)
+{
+   position.x += velocity.x;
+   position.y += velocity.y;
+});
+```
