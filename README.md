@@ -109,3 +109,9 @@ dom::Utility<>::iterate<Position, Velocity>(e, [](Entity e, Position &position, 
    position.y += velocity.y;
 });
 ```
+
+Sometimes its desirable to have the possibility to attach multiple components of one type to an entity. 
+To do this, your Component has to derive from `dom::MultiComponent` interface. See domTest.cpp for an example.
+Note that this has zero overhead impact on the overall system. Components are normally intended to be naturally 
+exclusive per entity. Using `dom::Multicomponent` however will give the components that derive from it a small overhead, 
+since every component stores a handle to the next component (in single-linked-list manner).
