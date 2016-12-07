@@ -189,3 +189,35 @@ BOOST_AUTO_TEST_CASE( single_entity )
     e.destroy();
     }
 }
+
+
+BOOST_AUTO_TEST_CASE( test_multi_component )
+{
+    struct Position : public dom::MultiComponent<Position>
+    {
+        float x;
+        float y;
+
+        Position() {}
+        Position(float cx, float cy) : x(cx), y(cy) {}
+    };
+
+    dom::Universe<> universe;
+
+    //creat eentity, assign single component, destroy
+    {
+        dom::EntityHandle<> e = universe.create();
+        e.add<Position>(universe.instantiate<Position>(7, 0.0f, 0.0f));
+
+        BOOST_REQUIRE(e.has<Position>());
+        BOOST_CHECK_EQUAL(e.get<Position>().x, 0.0f);
+        int i = 0;
+        Position* p = &e.modify<Position>();
+        while(p)
+        {
+            p = p->getNext(universe);
+            i++;
+        }
+        BOOST_CHECK_EQUAL(i, 8);
+    }
+}
