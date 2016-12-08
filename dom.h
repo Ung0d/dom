@@ -125,6 +125,9 @@ namespace dom
         /** \brief Returns the number of memory blocks currently allocated. */
         std::size_t blockCount() const;
 
+        /** \brief Returns the number of elements in the list. */
+        std::size_t size() const;
+
         ~ChunkedArray();
 
     private:
@@ -195,18 +198,19 @@ namespace dom
     * Note that MultiComponent-sets must not persist continously in memory, but if they are
     * instantiated at once, the chances are good that they are.
     */
-    template<typename C>
+    template<typename C, typename CINDEX = unsigned char, CINDEX COMP_TOTAL = 64>
     class MultiComponent
     {
     public:
         ComponentHandle next;
+        Universe<CINDEX, COMP_TOTAL>* universe; //the universe that holds this component, needed for correct destruction
 
         MultiComponent();
 
-        template<typename CINDEX, CINDEX COMP_TOTAL>
-        C* getNext(Universe<CINDEX, COMP_TOTAL>& universe);
-        template<typename CINDEX, CINDEX COMP_TOTAL>
-        const C* getNext(Universe<CINDEX, COMP_TOTAL>& universe) const;
+        C* getNext();
+        const C* getNext() const;
+
+        virtual ~MultiComponent();
     };
 
     /** \brief A Utility struct used to construct a component with parameters. */
@@ -393,7 +397,7 @@ namespace dom
     class Universe
     {
     friend class EntityHandle<CINDEX, COMP_TOTAL>;
-    template <class C> friend class MultiComponent;
+    template <class C, typename CI, CI CT> friend class MultiComponent;
     template <class C, class ENABLE> friend class ComponentInstantiator;
     public:
         static constexpr std::size_t ENTITY_BLOCK_SIZE = 8192; ///<number of entities in a single, continous memory block
@@ -462,9 +466,7 @@ namespace dom
         /**
         * \brief Removes the component of type C from the entity. If the component doesnt exists, the method does nothing.
         */
-        template<typename C, typename std::enable_if<!std::is_base_of<MultiComponent<C>, C>::value>::type* = nullptr>
-        void removeComponent( const EntityHandle<CINDEX, COMP_TOTAL>& e );
-        template<typename C, typename std::enable_if<std::is_base_of<MultiComponent<C>, C>::value>::type* = nullptr>
+        template<typename C>
         void removeComponent( const EntityHandle<CINDEX, COMP_TOTAL>& e );
 
         /** \brief Computes and returns the id of the given entity. */
@@ -484,6 +486,13 @@ namespace dom
         /** \brief Helper method to instantiate components with parameters. */
         template<typename C, typename ... PARAM>
         ComponentInstantiator<C> instantiate(PARAM&&... param);
+
+        /** \brief Size method mostly useful for debugging. May useful for something else. */
+        std::size_t getEntityCount() const;
+
+        /** \brief Size method mostly useful for debugging. May useful for something else. */
+        template<typename C>
+        std::size_t getComponentCount() const;
 
     private:
         std::array< std::unique_ptr<BaseChunkedArray>, COMP_TOTAL> mManagers;
@@ -652,6 +661,15 @@ namespace dom
     std::size_t ChunkedArray<T, BLOCK_SIZE, REUSE_C>::blockCount() const
     {
         return mBlocks.size();
+    }
+
+    template<typename T, std::size_t BLOCK_SIZE, std::size_t REUSE_C>
+    std::size_t ChunkedArray<T, BLOCK_SIZE, REUSE_C>::size() const
+    {
+        std::size_t sum = 0;
+        for (const auto& block : mBlocks)
+            sum += block.contentCount;
+        return sum;
     }
 
     template<typename T, std::size_t BLOCK_SIZE, std::size_t REUSE_C>
@@ -898,7 +916,8 @@ namespace dom
         ComponentUnpacker<C...>::unpack(*this, data.mComponentHandles, mask, ci...);
         disconnect(data);
         connect(data, mask);
-        ComponentUnpacker<C...>::sort(data.mComponentHandles, data.mMetaData->mMetaData,sizeBefore);
+        if (sizeBefore < data.mComponentHandles.size())
+            ComponentUnpacker<C...>::sort(data.mComponentHandles, data.mMetaData->mMetaData,sizeBefore);
     }
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
@@ -934,7 +953,7 @@ namespace dom
     }
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
-    template<typename C, typename std::enable_if<!std::is_base_of<MultiComponent<C>, C>::value>::type*>
+    template<typename C>
     void Universe<CINDEX, COMP_TOTAL>::removeComponent( const EntityHandle<CINDEX, COMP_TOTAL>& e )
     {
         if (hasComponent<C>(e))
@@ -942,32 +961,6 @@ namespace dom
             EntityData<CINDEX, COMP_TOTAL>& data = mEntityData.get(e.mHandle);
             auto handleIndex = data.mMetaData->mMetaData[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ];
             mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get()->destroy( data.mComponentHandles[handleIndex] );
-            data.mComponentHandles.erase( data.mComponentHandles.begin() + handleIndex );
-
-            std::bitset<COMP_TOTAL> mask = data.mMetaData->mComponentMask;
-            mask.set(ComponentTraits<C, CINDEX, COMP_TOTAL>::getID(), false); //set the bit
-            disconnect(data);
-            connect(data, mask);
-        }
-    }
-
-
-    template<typename CINDEX, CINDEX COMP_TOTAL>
-    template<typename C, typename std::enable_if<std::is_base_of<MultiComponent<C>, C>::value>::type*>
-    void Universe<CINDEX, COMP_TOTAL>::removeComponent( const EntityHandle<CINDEX, COMP_TOTAL>& e )
-    {
-        if (hasComponent<C>(e))
-        {
-            EntityData<CINDEX, COMP_TOTAL>& data = mEntityData.get(e.mHandle);
-            auto handleIndex = data.mMetaData->mMetaData[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ];
-            ComponentHandle current = data.mComponentHandles[handleIndex];
-            ComponentHandle next = ComponentHandle::null();
-            while (current)
-            {
-                next = mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get()->get(current).next;
-                mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get()->destroy(current);
-                current = next;
-            }
             data.mComponentHandles.erase( data.mComponentHandles.begin() + handleIndex );
 
             std::bitset<COMP_TOTAL> mask = data.mMetaData->mComponentMask;
@@ -1018,25 +1011,35 @@ namespace dom
     }
 
 
-    template<typename C>
-    MultiComponent<C>::MultiComponent() : next(ComponentHandle::null()) {}
+    template<typename C, typename CINDEX, CINDEX COMP_TOTAL>
+    MultiComponent<C, CINDEX, COMP_TOTAL>::MultiComponent() : next(ComponentHandle::null()) {}
 
-    template<typename C>
-    template<typename CINDEX, CINDEX COMP_TOTAL>
-    C* MultiComponent<C>::getNext(Universe<CINDEX, COMP_TOTAL>& universe)
+    template<typename C, typename CINDEX, CINDEX COMP_TOTAL>
+    C* MultiComponent<C, CINDEX, COMP_TOTAL>::getNext()
     {
         if (next)
-            return &universe.template modifyComponent<C>(next);
+            return &universe->template modifyComponent<C>(next);
         else return nullptr;
     }
 
-    template<typename C>
-    template<typename CINDEX, CINDEX COMP_TOTAL>
-    const C* MultiComponent<C>::getNext(Universe<CINDEX, COMP_TOTAL>& universe) const
+    template<typename C, typename CINDEX, CINDEX COMP_TOTAL>
+    const C* MultiComponent<C, CINDEX, COMP_TOTAL>::getNext() const
     {
         if (next)
-            return &universe.template getComponent<C>(next);
+            return &universe->template getComponent<C>(next);
         else return nullptr;
+    }
+
+    template<typename C, typename CINDEX, CINDEX COMP_TOTAL>
+    MultiComponent<C, CINDEX, COMP_TOTAL>::~MultiComponent()
+    {
+        if (next)
+        {
+            ChunkedArray<C, Universe<CINDEX, COMP_TOTAL>::COMPONENT_BLOCK_SIZE>* ca =
+                static_cast<ChunkedArray<C, Universe<CINDEX, COMP_TOTAL>::COMPONENT_BLOCK_SIZE>*>
+                ( universe->mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get() );
+            ca->destroy(next);
+        }
     }
 
     template<typename CINDEX, CINDEX COMP_TOTAL>
@@ -1044,6 +1047,25 @@ namespace dom
     ComponentInstantiator<C> Universe<CINDEX, COMP_TOTAL>::instantiate(PARAM&&... param)
     {
         return ComponentInstantiator<C>( *this, std::forward<PARAM>(param)... );
+    }
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    std::size_t Universe<CINDEX, COMP_TOTAL>::getEntityCount() const
+    {
+        return mEntityData.size();
+    }
+
+    template<typename CINDEX, CINDEX COMP_TOTAL>
+    template<typename C>
+    std::size_t Universe<CINDEX, COMP_TOTAL>::getComponentCount() const
+    {
+        if (mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ])
+        {
+            ChunkedArray<C, COMPONENT_BLOCK_SIZE>* ca = static_cast<ChunkedArray<C, COMPONENT_BLOCK_SIZE>*>
+                                                            ( mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get() );
+            return ca->size();
+        }
+        else return 0u;
     }
 
 
@@ -1089,10 +1111,11 @@ namespace dom
                 static_cast<ChunkedArray<C, universe.COMPONENT_BLOCK_SIZE>*>( universe.mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get() );
         handle = ca->add( std::forward<PARAM>(param)... );
         ComponentHandle current = handle;
-        for (std::size_t i = 0; i < num; ++i)
+        for (std::size_t i = 1; i < num; ++i)
         { //build the single linked list
             C& c = ca->get(current);
             c.next = ca->add( std::forward<PARAM>(param)... );
+            c.universe = &universe;
             current = c.next;
         }
     }
@@ -1105,14 +1128,7 @@ namespace dom
     {
         ChunkedArray<C, universe.COMPONENT_BLOCK_SIZE>* ca =
                 static_cast<ChunkedArray<C, universe.COMPONENT_BLOCK_SIZE>*>( universe.mManagers[ ComponentTraits<C, CINDEX, COMP_TOTAL>::getID() ].get() );
-        ComponentHandle current = handle;
-        ComponentHandle next = ComponentHandle::null();
-        while (current)
-        {
-            next = ca->get(current).next;
-            ca->destroy(current);
-            current = next;
-        }
+        ca->destroy(handle);
     }
 
 
