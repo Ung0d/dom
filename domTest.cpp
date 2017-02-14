@@ -231,7 +231,7 @@ BOOST_AUTO_TEST_CASE( single_entity )
 
 BOOST_AUTO_TEST_CASE( test_multi_component )
 {
-    struct Position : public dom::MultiComponent<Position>
+    struct Position
     {
         float x;
         float y;
@@ -244,22 +244,150 @@ BOOST_AUTO_TEST_CASE( test_multi_component )
 
     dom::EntityHandle<> e = universe.create();
     BOOST_CHECK_EQUAL(universe.getComponentCount<Position>(), 0u);
-    e.add<Position>(universe.instantiate<Position>(7, 0.0f, 0.0f));
+    BOOST_CHECK_EQUAL(universe.getComponentCount< dom::MultiComponent<Position> >(), 0u);
+    e.add< dom::MultiComponent<Position> >( universe.instantiate< dom::MultiComponent<Position> >(7, universe, 0.0f, 0.0f) );
     BOOST_CHECK_EQUAL(universe.getComponentCount<Position>(), 7u);
-    e.add<Position>(universe.instantiate<Position>(2, 0.0f, 0.0f)); //these additional component instantiations must be deleted
+    BOOST_CHECK_EQUAL(universe.getComponentCount< dom::MultiComponent<Position> >(), 1u);
+    e.add< dom::MultiComponent<Position> >(universe.instantiate< dom::MultiComponent<Position> >(2, universe, 0.0f, 0.0f)); //these additional component instantiations must be deleted
     BOOST_CHECK_EQUAL(universe.getComponentCount<Position>(), 7u);  //check for memory leaks
+    BOOST_CHECK_EQUAL(universe.getComponentCount< dom::MultiComponent<Position> >(), 1u);
 
-    BOOST_REQUIRE(e.has<Position>());
-    BOOST_CHECK_EQUAL(e.get<Position>().x, 0.0f);
-    int i = 0;
-    Position* p = &e.modify<Position>();
-    while(p)
-    {
-        p = p->getNext();
-        i++;
-    }
-    BOOST_CHECK_EQUAL(i, 7);
+    BOOST_REQUIRE( !e.has< Position >() );
+    BOOST_REQUIRE( e.has< dom::MultiComponent<Position> >() );
+    BOOST_CHECK_EQUAL( e.get< dom::MultiComponent<Position> >().getComponent(0).x, 0.0f );
+    BOOST_CHECK_EQUAL( e.get< dom::MultiComponent<Position> >().getComponent(4).x, 0.0f );
+    dom::MultiComponent<Position>& p = e.modify<dom::MultiComponent<Position>>();
+    BOOST_CHECK_EQUAL(p.getComponentCount(), 7u);
 
     e.destroy();
     BOOST_CHECK_EQUAL(universe.getComponentCount<Position>(), 0u);  //check for memory leaks
+    BOOST_CHECK_EQUAL(universe.getComponentCount< dom::MultiComponent<Position> >(), 0u);
 }
+
+struct TestMe
+{
+    static int dcounter;
+
+    float f;
+    bool b;
+    std::string s;
+
+    ~TestMe() {  dcounter++; }
+};
+
+int TestMe::dcounter = 0;
+
+BOOST_AUTO_TEST_CASE( test_move_insert )
+{
+    {
+    TestMe test;
+    test.f = 1.0f;
+    test.b = true;
+    test.s = "test";
+
+    dom::ChunkedArray<TestMe> ca;
+    auto h = ca.add(test);  //add by copy
+    BOOST_CHECK_EQUAL(ca.get(h).s, "test");
+    ca.destroy(h);
+    }
+    BOOST_CHECK_EQUAL(TestMe::dcounter, 2);
+}
+
+BOOST_AUTO_TEST_CASE( test_attach_order )
+{
+    struct Position
+    {
+        float x;
+        float y;
+
+        Position() : x(0), y(0) {}
+        Position(float cx, float cy) : x(cx), y(cy) {}
+    };
+
+    struct Velocity
+    {
+        float x;
+        float y;
+        Velocity() : x(0), y(0) {}
+    };
+
+    struct Gravity
+    {
+        float grav;
+
+        Gravity() {}
+        Gravity(float cgrav) : grav(cgrav) {}
+    };
+
+    dom::Universe<> universe;
+    dom::EntityHandle<> e = universe.create<Position, Velocity>();
+    dom::EntityHandle<> e2 = universe.create<Gravity, Velocity, Position>();
+    BOOST_CHECK_EQUAL(e2.get<Velocity>().x, 0);
+    BOOST_CHECK_EQUAL(e2.get<Position>().x, 0);
+    BOOST_CHECK_EQUAL(e.get<Velocity>().x, 0);
+    BOOST_CHECK_EQUAL(e.get<Position>().x, 0);
+}
+
+BOOST_AUTO_TEST_CASE( speed_test )
+{
+    using Universe = dom::Universe<>;
+    using Entity = dom::EntityHandle<>;
+
+    const unsigned num = 1000000;
+
+    struct Position
+    {
+        Position(float cx, float cy) : x(cx), y(cy) {}
+        Position() : x(0), y(0) {}
+
+        float x;
+        float y;
+    };
+    struct Velocity
+    {
+        Velocity(float cx, float cy) : x(cx), y(cy) {}
+        Velocity() : x(1), y(1) {}
+
+        float x;
+        float y;
+    };
+
+
+    Universe universe;
+    std::list<Entity> e;
+
+    std::cout << "Checking for dom" << std::endl;
+
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    for (std::size_t i = 0; i < num; ++i)
+    {
+        e.emplace_back(universe.create());
+        e.back().add<Position>();
+        e.back().add<Velocity>();
+    }
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    std::cout << num << " entities with components created in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " milliseconds" << std::endl << std::endl;
+
+    for (auto& entity : e)
+    {
+        entity.destroy();
+    }
+    e.clear();
+
+    std::cout<< std::endl << "checking for dom with improvements" << std::endl;
+
+    begin = std::chrono::steady_clock::now();
+    universe.create<Position, Velocity>(num, [&e] (Entity en) { e.emplace_back(en); });
+    end = std::chrono::steady_clock::now();
+    std::cout << num << " entities with components created in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " milliseconds" << std::endl << std::endl;
+
+    begin = std::chrono::steady_clock::now();
+    dom::Utility<Entity>::iterate<Position, Velocity>(e, [](Entity e, Position &position, Velocity &direction)
+        {
+          position.x += direction.x;
+          position.y += direction.y;
+        });
+    end = std::chrono::steady_clock::now();
+    std::cout << "Iterated over all components in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " milliseconds" << std::endl << std::endl;
+}
+
