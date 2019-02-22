@@ -1,5 +1,11 @@
+<<<<<<< HEAD
 #define BOOST_TEST_MODULE EntityTesting
 #include "dom.h"
+=======
+#include "dom.h"
+
+#define BOOST_TEST_MODULE EntityTesting
+>>>>>>> 213ce508ea7dd654dc4f8dfae02edb251363ef79
 #include <boost/test/unit_test.hpp>
 #include <iostream>
 #include <chrono>
@@ -292,6 +298,7 @@ BOOST_AUTO_TEST_CASE( test_move_insert )
     BOOST_CHECK_EQUAL(TestMe::dcounter, 2);
 }
 
+
 BOOST_AUTO_TEST_CASE( test_attach_order )
 {
     struct Position
@@ -355,6 +362,7 @@ BOOST_AUTO_TEST_CASE( speed_test )
 
     const unsigned num = 1000000;
 
+
     struct Position
     {
         Position(float cx, float cy) : x(cx), y(cy) {}
@@ -410,4 +418,3 @@ BOOST_AUTO_TEST_CASE( speed_test )
     end = std::chrono::steady_clock::now();
     std::cout << "Iterated over all components in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " milliseconds" << std::endl << std::endl;
 }
-
